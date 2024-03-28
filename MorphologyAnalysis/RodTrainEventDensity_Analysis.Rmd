@@ -1,0 +1,148 @@
+---
+title: "Rod Train Event Density analysis"
+author: "Jenn Kim"
+date: "06/11/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# load packages and set seed
+```{r}
+library(tidyverse)
+library(cowplot)
+library(ggplot2)
+theme_set(theme_cowplot())
+library(nlme)
+library(lsmeans)
+```
+
+# load data
+```{r}
+data <- read.csv("RodTrainCounts-Area-Density.csv") %>% select(-X)
+```
+
+# cluster boxplots
+```{r}
+data$Condition <- factor(data$Condition, levels=c("PBS","1xLPS","2xLPS","3xLPS","4xLPS"))
+data$Density <- as.numeric(data$Density)
+
+# subregion
+data %>% 
+  ggplot(aes(x=Condition, y=Density, group=Condition)) +
+  facet_wrap(~Sex*BrainRegion*Subregion, scales="free", ncol=7) +
+  geom_boxplot(aes(group=Condition, fill=Condition), outlier.shape=NA) +
+  scale_fill_viridis_d() +
+  geom_point(position=position_dodge(width=0.9), size=1, aes(group=Condition, color=Sex)) +
+  ggtitle("1-4xLPS mouse dataset: Females") +
+  labs(fill="Treatment") +
+  ylab("Density") +
+  theme_classic(base_size=14) +
+  theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
+  theme(strip.background=element_rect(fill="#CCCCCC"))
+```
+
+# by brain region -- save this one
+```{r}
+test <- data %>% 
+  group_by(AnimalID, BrainRegion, Sex, Condition) %>%
+  summarise(TotalAreaBrainRegion=sum(Area), TotalCountsBrainRegion=sum(TrainCounts)) %>%
+  mutate(DensityBrainRegion=TotalCountsBrainRegion/TotalAreaBrainRegion)
+
+write.csv(test, "RodTrainDensity_BrainRegion.csv")
+
+pdf("RodTrainDensity_Males.pdf", width=9, height=3.2)
+test %>% filter(Sex=="M") %>%
+  ggplot(aes(x=Condition, y=DensityBrainRegion, group=Condition)) +
+  facet_wrap(~Sex*BrainRegion, scales="free", ncol=3) +
+  geom_boxplot(aes(group=Condition, fill=Condition), outlier.shape=NA) +
+  scale_fill_viridis_d() +
+  geom_point(position=position_dodge(width=0.9), size=1, aes(group=Condition)) +
+  ggtitle("1-4xLPS mouse dataset: Rod-train events") +
+  labs(fill="Condition") +
+  ylab("Density") +
+  theme_classic(base_size=14) +
+  theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
+  theme(strip.background=element_rect(fill="#CCCCCC")) +
+  ylim(0,2.15e-05)
+dev.off()
+
+
+pdf("RodTrainDensity_Females.pdf", width=9, height=3.2)
+test %>% filter(Sex=="F") %>%
+  ggplot(aes(x=Condition, y=DensityBrainRegion, group=Condition)) +
+  facet_wrap(~Sex*BrainRegion, scales="free", ncol=3) +
+  geom_boxplot(aes(group=Condition, fill=Condition), outlier.shape=NA) +
+  scale_fill_viridis_d() +
+  geom_point(position=position_dodge(width=0.9), size=1, aes(group=Condition)) +
+  ggtitle("1-4xLPS mouse dataset: Rod-train events") +
+  labs(fill="Condition") +
+  ylab("Density") +
+  theme_classic(base_size=14) +
+  theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
+  theme(strip.background=element_rect(fill="#CCCCCC")) +
+  ylim(0,8.1e-06)
+dev.off()
+```
+
+
+# stats analysis
+```{r}
+test2 <- test
+
+brainregion <- unique(as.character(test$BrainRegion))
+
+# females
+females <- test2 %>% filter(Sex=="F")
+
+# stats
+  tmp <- females
+  tmp <- as.data.frame(tmp)
+  
+  #model
+  model <- lme(DensityBrainRegion ~ Condition*BrainRegion, ~1|AnimalID, data=tmp)
+  
+  #anova
+  anova_females = anova(model)
+  
+  #posthoc
+  ph <- emmeans(model, ~Condition|BrainRegion)
+  ph2 <- contrast(ph, method="pairwise", adjust="none")
+  ph3 <- test(ph2, by=NULL, adjust="BH")
+  posthoc_females <- as.data.frame(ph3)
+
+# significance
+anova_females$Significant <- ifelse(anova_females$`p-value` < 0.05, "significant", "ns")
+posthoc_females$Significant <- ifelse(posthoc_females$p.value < 0.05, "significant", "ns")
+
+write.csv(anova_females,"RodTrainEvents_Females_Anova.csv")
+write.csv(posthoc_females, "RodTrainEvents_Females_Posthoc.csv")
+
+# males
+males <- test2 %>% filter(Sex=="M")
+
+# stats
+  tmp <- males
+  tmp <- as.data.frame(tmp)
+  
+  #model
+  model <- lme(DensityBrainRegion ~ Condition*BrainRegion, ~1|AnimalID, data=tmp)
+  
+  #anova
+  anova_males = anova(model)
+  
+  #posthoc
+  ph <- emmeans(model, ~Condition|BrainRegion)
+  ph2 <- contrast(ph, method="pairwise", adjust="none")
+  ph3 <- test(ph2, by=NULL, adjust="BH")
+  posthoc_males <- as.data.frame(ph3)
+
+# significance
+anova_males$Significant <- ifelse(anova_males$`p-value` < 0.05, "significant", "ns")
+posthoc_males$Significant <- ifelse(posthoc_males$p.value < 0.05, "significant", "ns")
+
+write.csv(anova_males,"RodTrainEvents_Males_Anova.csv")
+write.csv(posthoc_males, "RodTrainEvents_Males_Posthoc.csv")
+```

@@ -1,0 +1,200 @@
+---
+title: "1-4xLPS_MicrogliaMorphology"
+author: "Jenn Kim"
+date: "06/11/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# load packages and set seed
+```{r}
+library(MicrogliaMorphologyR)
+library(factoextra)
+library(ppclust)
+
+set.seed(1)
+```
+
+# read in data
+```{r}
+data2 <- read.csv("LPS67_MorphologyData_Tidied.csv") %>% select(-X)
+
+feature_names <- c("Foreground pixels", "Density of foreground pixels in hull area", 
+                   "Span ratio of hull (major/minor axis)", "Maximum span across hull", 
+                   "Area", "Perimeter", "Circularity", "Width of bounding rectangle", 
+                   "Height of bounding rectangle", "Maximum radius from hull's center of mass", 
+                   "Max/min radii from hull's center of mass", "Relative variation (CV) in radii from hull's center of mass", 
+                   "Mean radius", "Diameter of bounding circle", "Maximum radius from circle's center of mass", 
+                   "Max/min radii from circle's center of mass", "Relative variation (CV) in radii from circle's center of mass", 
+                   "Mean radius from circle's center of mass", "# of branches", 
+                   "# of junctions", "# of end point voxels", "# of junction voxels", 
+                   "# of slab voxels", "Average branch length", "# of triple points", 
+                   "# of quadruple points", "Maximum branch length")
+colnames(data2)[11:37] <- feature_names
+```
+
+# split out cohorts and transform data
+```{r}
+LPS6 <- data2 %>% filter(Cohort=="LPS6")
+LPS7 <- data2 %>% filter(Cohort=="LPS7")
+
+data_log <- transform_log(data2, 1, start=11, end=37)
+
+samplesize(data2, Sex, BrainRegion, Condition)
+```
+
+# heatmap of feature correlations
+```{r}
+featurecorrelations(data2,
+                    featurestart=11, featureend=37,
+                    rthresh=0.8, pthresh=0.05,
+                    title="Correlations across features")
+```
+
+# PCA and exploratory data analysis
+```{r}
+pcadata_elbow(data_log, featurestart=11, featureend=37)
+pca_data <- pcadata(data_log,
+                    featurestart=11, featureend=37,
+                    pc.start=1, pc.end=10)
+pcfeaturecorrelations(pca_data, pc.start=1, pc.end=3,
+                      feature.start=21, feature.end=47,
+                      rthresh=0.75, pthresh=0.05,
+                      title="Correlation between PCs and features")
+
+gathered_expvariables <- pca_data %>% gather(variable, value, 14:20)
+plots_expvariable(gathered_expvariables, "PC1", "PC2")
+```
+
+# K-means clustering
+```{r}
+pca_data_scale <- transform_scale(pca_data, start=1, end=3)
+kmeans_input <- pca_data_scale[1:3]
+
+sampling <- kmeans_input[sample(nrow(kmeans_input), 5000),]
+fviz_nbclust(sampling, kmeans, method="wss", nstart=25, iter.max=50)
+fviz_nbclust(sampling, kmeans, method="silhouette", nstart=25, iter.max=50)
+
+data_kmeans <- kmeans(kmeans_input, centers=4)
+pca_kmeans <- cbind(pca_data[1:5], data2, as.data.frame(data_kmeans$cluster)) %>%
+  rename(Cluster=`data_kmeans$cluster`)
+head(pca_kmeans,3)
+
+plot <- clusterplots(pca_kmeans, "PC1", "PC2")
+plot + scale_colour_viridis_d()
+
+clusterfeatures(pca_kmeans, featurestart=16, featureend=42)
+```
+
+# cluster boxplots
+```{r}
+cp <- clusterpercentage(pca_kmeans, "Cluster", AnimalID, Condition, Sex, BrainRegion)
+
+cp$Condition <- factor(cp$Condition, levels=c("PBS","1xLPS","2xLPS","3xLPS","4xLPS"))
+
+# update cluster labels
+cp <- cp %>% mutate(Cluster = 
+                      case_when(Cluster=="1" ~ "Ramified",
+                                Cluster=="2" ~ "Ameboid",
+                                Cluster=="3" ~ "Hypertrophic",
+                                Cluster=="4" ~ "Rod-like"))
+
+# save this one
+cp %>% 
+  ggplot(aes(x=Cluster, y=percentage*100, group=interaction(Cluster, Condition))) +
+  facet_wrap(~BrainRegion*Sex, scales="free", nrow=3) +
+  geom_boxplot(width=1, aes(group=interaction(Cluster, Condition), fill=Condition), outlier.shape=NA) +
+  scale_fill_brewer(palette="Reds") + 
+  geom_point(position=position_dodge(width=1), size=1, aes(group=interaction(Cluster,Condition), color=Sex)) +
+  scale_fill_brewer(palette="Reds") +  
+  ggtitle("1-4xLPS mouse dataset: K-means clusters") +
+  labs(fill="Treatment") +
+  ylab("Percentage") +
+  theme_classic() +
+  theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1, size=8)) +
+  theme(strip.background=element_rect(fill="#CCCCCC")) + 
+  ylim(0,55)
+
+cp %>% 
+  ggplot(aes(x=Cluster, y=percentage*100, group=interaction(Cluster, Condition), fill=Condition)) +
+  facet_wrap(~BrainRegion*Sex, scales="free", nrow=3) +
+  geom_bar(stat="identity", position="dodge") +
+  scale_fill_brewer(palette="Reds") +  
+  ggtitle("1-4xLPS mouse dataset: K-means clusters") +
+  labs(fill="Cluster") +
+  ylab("Percentage") +
+  theme_classic(base_size=10) +
+  theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
+  theme(strip.background=element_rect(fill="#CCCCCC")) + 
+  ylim(0,55)
+
+cp %>% 
+  ggplot(aes(x=Condition, y=percentage*100, group=interaction(Cluster, Condition), fill=Cluster)) +
+  facet_wrap(~BrainRegion*Sex, scales="free", nrow=3) +
+  geom_bar(stat="identity", position="dodge") +
+  scale_fill_viridis_d() + 
+  ggtitle("1-4xLPS mouse dataset: K-means clusters") +
+  labs(fill="Cluster") +
+  ylab("Percentage") +
+  theme_classic(base_size=14) +
+  theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
+  theme(strip.background=element_rect(fill="#CCCCCC")) + 
+  ylim(0,55)
+```
+
+# stats analysis
+```{r}
+stats.input <- cp
+stats.input$AnimalID <- factor(stats.input$AnimalID)
+stats.input$Cluster <- factor(stats.input$Cluster)
+stats.input$Condition <- factor(stats.input$Condition)
+stats.input$Sex <- factor(stats.input$Sex)
+stats.input$BrainRegion <- factor(stats.input$BrainRegion)
+
+# males
+stats.testing <- stats_cluster.animal(stats.input %>% filter(Sex=="M", BrainRegion=="FC"),
+                                      "percentage ~ Cluster*Condition + (1|AnimalID)",
+                                      "~Condition|Cluster", "~Condition|Cluster",
+                                      "BH")
+stats.testing[[1]] %>% write.csv("M-FC_anova.csv")
+stats.testing[[2]] %>% write.csv("M-FC_posthoc.csv")
+
+stats.testing <- stats_cluster.animal(stats.input %>% filter(Sex=="M", BrainRegion=="HC"),
+                                      "percentage ~ Cluster*Condition + (1|AnimalID)",
+                                      "~Condition|Cluster", "~Condition|Cluster",
+                                      "BH")
+stats.testing[[1]] %>% write.csv("M-HC_anova.csv")
+stats.testing[[2]] %>% write.csv("M-HC_posthoc.csv")
+
+stats.testing <- stats_cluster.animal(stats.input %>% filter(Sex=="M", BrainRegion=="STR"),
+                                      "percentage ~ Cluster*Condition + (1|AnimalID)",
+                                      "~Condition|Cluster", "~Condition|Cluster",
+                                      "BH")
+stats.testing[[1]] %>% write.csv("M-STR_anova.csv")
+stats.testing[[2]] %>% write.csv("M-STR_posthoc.csv")
+
+# females
+stats.testing <- stats_cluster.animal(stats.input %>% filter(Sex=="F", BrainRegion=="FC"),
+                                      "percentage ~ Cluster*Condition + (1|AnimalID)",
+                                      "~Condition|Cluster", "~Condition|Cluster",
+                                      "BH")
+stats.testing[[1]] %>% write.csv("F-FC_anova.csv")
+stats.testing[[2]] %>% write.csv("F-FC_posthoc.csv")
+
+stats.testing <- stats_cluster.animal(stats.input %>% filter(Sex=="F", BrainRegion=="HC"),
+                                      "percentage ~ Cluster*Condition + (1|AnimalID)",
+                                      "~Condition|Cluster", "~Condition|Cluster",
+                                      "BH")
+stats.testing[[1]] %>% write.csv("F-HC_anova.csv")
+stats.testing[[2]] %>% write.csv("F-HC_posthoc.csv")
+
+stats.testing <- stats_cluster.animal(stats.input %>% filter(Sex=="F", BrainRegion=="STR"),
+                                      "percentage ~ Cluster*Condition + (1|AnimalID)",
+                                      "~Condition|Cluster", "~Condition|Cluster",
+                                      "BH")
+stats.testing[[1]] %>% write.csv("F-STR_anova.csv")
+stats.testing[[2]] %>% write.csv("F-STR_posthoc.csv")
+```
