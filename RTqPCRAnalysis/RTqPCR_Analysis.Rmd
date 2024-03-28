@@ -1,0 +1,341 @@
+---
+title: "RTqPCR Data Analysis"
+author: "Jenn Kim"
+date: "17/10/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# MAIN FIGURES
+
+### Load libraries
+```{r}
+library(tidyverse)
+library(xlsx)
+library(ComplexHeatmap)
+library(dendsort)
+library(cowplot)
+library(ggplot2)
+theme_set(theme_cowplot())
+library(nlme)
+library(lsmeans)
+```
+
+### Read in RT-qPCR results
+```{r}
+#make sure to actually save as .csv file vs. just changing the suffix of file name 
+qPCR <- read.csv("LPS67_qPCR_ddCT_analysis.csv")
+qPCR <- as.data.frame(qPCR)
+qPCR$BrainRegion <- c("Frontal Cortex")
+```
+
+## LPS Cohort 6: Females (PBS, 1xLPS, 2xLPS, 4xLPS)
+
+### Test dCT values for LPS effects for each gene
+```{r}
+dCT_data <- qPCR[,grepl("\\.dCT",colnames(qPCR))]
+
+dCT_data <- as.data.frame(dCT_data)
+dCT_data$BrainRegion <- qPCR$BrainRegion
+dCT_data$Condition <- qPCR$Condition
+dCT_data$Cohort <- qPCR$Cohort
+dCT_data$Sex <- qPCR$Sex
+dCT_data$SacTime <- qPCR$SacTime
+dCT_data$SampleName <- qPCR$SampleName
+
+dCT_data <- dCT_data %>% unite(MouseID, c(Cohort,SampleName), sep="_", remove=FALSE)
+dCT_data <- as.data.frame(dCT_data)
+
+dCT <- dCT_data %>% filter(Cohort=="Exp6")
+
+#loop through each gene
+genes <- unique(as.character(colnames(qPCR[,grepl("\\.dCT",colnames(qPCR))])))
+
+#rename genes:
+firstup <- function(x) {
+  substr(x, 1, 1) <- toupper(substr(x, 1, 1))
+  x
+}
+
+#loop for gene:
+anovafullmodel <-NULL
+posthocfullmodel <- NULL
+
+# loop for gene:
+for(i in genes){
+  
+  print(i)
+  #subset data for matching each sample/condition combo
+  tmp <- dCT[,i]
+  
+  tmp <- as.data.frame(tmp)
+  tmp$BrainRegion <- dCT$BrainRegion
+  tmp$Condition <- dCT$Condition
+  tmp$Cohort <- dCT$Cohort
+  tmp$Sex <- dCT$Sex
+  tmp$SacTime <- dCT$SacTime
+  tmp$SampleName <- dCT$SampleName
+  tmp$MouseID <- dCT$MouseID
+
+  #fix names gene
+  genename <- gsub("..dCT.","",i)
+  genename <- firstup(tolower(genename))
+  colnames(tmp)[1]  <- c("gene")
+
+    #full model :
+    model <- lme(gene ~ Condition, ~1|MouseID, data = tmp) 
+    
+    anova = anova(model)
+    anova$gene = paste(genename)
+    
+    #posthocs
+    refgrid <- ref.grid(model)
+    ph <- emmeans(refgrid, ~Condition)
+    ph2 <- summary(contrast(ph, method="pairwise", adjust="BH"), infer=TRUE)
+    outsum <- as.data.frame(ph2)
+    outsum$gene <- genename
+    
+    anovafullmodel <- rbind(anovafullmodel,anova)
+    posthocfullmodel <- rbind(posthocfullmodel,outsum)
+}
+
+anovafullmodel$Significant <- ifelse(anovafullmodel$`p-value` < 0.05, "significant", "ns")
+posthocfullmodel$Significant <- ifelse(posthocfullmodel$p.value < 0.05, "significant", "ns")
+
+anovafullmodel %>% DT::datatable(., options=list(autoWidth=TRUE, scrollX=TRUE, scrollCollapse=TRUE))
+posthocfullmodel %>% DT::datatable(., options=list(autoWidth=TRUE, scrollX=TRUE, scrollCollapse=TRUE))
+
+write.csv(anovafullmodel, "LPS6_RTqPCR_anova.csv")
+write.csv(posthocfullmodel, "LPS6_RTqPCR_posthoc.csv")
+```
+
+### Graphs for 2^-ddCT Fold change relative to PBS control
+```{r, fig.width=8, fig.height=2}
+FC_data <- qPCR[,grepl("2\\...ddCT",colnames(qPCR))]
+
+FC_data <- as.data.frame(FC_data)
+FC_data$BrainRegion <- qPCR$BrainRegion
+FC_data$Condition <- qPCR$Condition
+FC_data$Cohort <- qPCR$Cohort
+FC_data$Sex <- qPCR$Sex
+FC_data$SacTime <- qPCR$SacTime
+FC_data$SampleName <- qPCR$SampleName
+
+FC_data <- FC_data %>% unite(MouseID, c(Cohort,SampleName), sep="_", remove=FALSE)
+FC_data <- as.data.frame(FC_data)
+
+FC <- FC_data %>% filter(Cohort=="Exp6")
+
+#genes
+genes <- unique(as.character(colnames(qPCR[,grepl("\\.dCT",colnames(qPCR))])))
+
+FC <- FC %>% group_by(Condition, MouseID) %>%
+  gather(gene, FoldChange,1:length(genes))
+
+#fix gene names:
+FC$gene <- gsub("..2...ddCT..","",FC$gene)
+#FC$gene  <- firstup(tolower(FC$gene ))
+FC$gene <- factor(FC$gene, levels=c("Cxcl16","S100a9","IL1B","TNFa"))
+
+#set as factor
+FC$Condition <- factor(FC$Condition, levels= c("PBS","1xLPS","2xLPS","4xLPS"))
+
+# Boxplots
+ggplot(FC, aes(x=Condition, y=FoldChange, group=Condition)) + 
+  facet_wrap(~Sex*gene, scales = "free", nrow=1)+
+  stat_summary(geom = "boxplot", 
+               fun.data = function(x) setNames(quantile(x, c(0.05, 0.25, 0.5, 0.75, 0.95)), c("ymin", "lower", "middle", "upper", "ymax")), 
+               position = "dodge", aes(fill=Condition))+ #gives line as median, top of box and bottom of box as 25th and 75th quartile, line = 5th and 9th percentile
+  geom_point(position = position_dodge(width = 0.90),size=1) + 
+  scale_fill_brewer(palette = "Reds") +
+  theme_cowplot(font_size = 8) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_x_discrete(name = "Condition") + #,limits = order2)+
+  scale_y_continuous(name = "Fold Change Relative PBS")
+
+# Supplementary Figure 3
+cbPalette <- c("lightblue", "yellow", "red","blue","purple")
+
+FC %>% filter(gene=="Cxcl16") %>%
+  ggplot(aes(x=Condition, y=log2(FoldChange), group=Condition)) + 
+  facet_wrap(~gene*BrainRegion, scales = "free", nrow=1)+
+  stat_summary(geom = "boxplot", 
+               fun.data = function(x) setNames(quantile(x, c(0.05, 0.25, 0.5, 0.75, 0.95)), c("ymin", "lower", "middle", "upper", "ymax")), 
+               position = "dodge", aes(fill=Condition))+ #gives line as median, top of box and bottom of box as 25th and 75th quartile, line = 5th and 9th percentile
+  geom_point(position = position_dodge(width = 0.90),size=1, shape=15) + 
+  scale_fill_manual(values = c("lightblue", "yellow", "red","purple")) +
+  theme_cowplot(font_size = 8) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_x_discrete(name = "Condition") + #,limits = order2)+
+  scale_y_continuous(name = "Log2 Fold Change Relative PBS")
+
+FC %>% filter(gene=="S100a9") %>%
+  ggplot(aes(x=Condition, y=log2(FoldChange), group=Condition)) + 
+  facet_wrap(~gene*BrainRegion, scales = "free", nrow=1)+
+  stat_summary(geom = "boxplot", 
+               fun.data = function(x) setNames(quantile(x, c(0.05, 0.25, 0.5, 0.75, 0.95)), c("ymin", "lower", "middle", "upper", "ymax")), 
+               position = "dodge", aes(fill=Condition))+ #gives line as median, top of box and bottom of box as 25th and 75th quartile, line = 5th and 9th percentile
+  geom_point(position = position_dodge(width = 0.90),size=1, shape=15) + 
+  scale_fill_manual(values = c("lightblue", "yellow", "red","purple")) +
+  theme_cowplot(font_size = 8) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_x_discrete(name = "Condition") + #,limits = order2)+
+  scale_y_continuous(name = "Log2 Fold Change Relative PBS")
+```
+
+## LPS Cohort 7: Males (PBS, 1xLPS, 2xLPS, 3xLPS, 4xLPS)
+
+### Test dCT values for LPS effects for each gene
+```{r}
+dCT_data <- qPCR[,grepl("\\.dCT",colnames(qPCR))]
+
+dCT_data <- as.data.frame(dCT_data)
+dCT_data$BrainRegion <- qPCR$BrainRegion
+dCT_data$Condition <- qPCR$Condition
+dCT_data$Cohort <- qPCR$Cohort
+dCT_data$Sex <- qPCR$Sex
+dCT_data$SacTime <- qPCR$SacTime
+dCT_data$SampleName <- qPCR$SampleName
+
+dCT_data <- dCT_data %>% unite(MouseID, c(Cohort,SampleName), sep="_", remove=FALSE)
+dCT_data <- as.data.frame(dCT_data)
+
+dCT <- dCT_data %>% filter(Cohort=="Exp7")
+
+#loop through each gene
+genes <- unique(as.character(colnames(qPCR[,grepl("\\.dCT",colnames(qPCR))])))
+
+#rename genes:
+firstup <- function(x) {
+  substr(x, 1, 1) <- toupper(substr(x, 1, 1))
+  x
+}
+
+#loop for gene:
+anovafullmodel <-NULL
+posthocfullmodel <- NULL
+
+# loop for gene:
+for(i in genes){
+  
+  print(i)
+  #subset data for matching each sample/condition combo
+  tmp <- dCT[,i]
+  
+  tmp <- as.data.frame(tmp)
+  tmp$BrainRegion <- dCT$BrainRegion
+  tmp$Condition <- dCT$Condition
+  tmp$Cohort <- dCT$Cohort
+  tmp$Sex <- dCT$Sex
+  tmp$SacTime <- dCT$SacTime
+  tmp$SampleName <- dCT$SampleName
+  tmp$MouseID <- dCT$MouseID
+
+  #fix names gene
+  genename <- gsub("..dCT.","",i)
+  genename <- firstup(tolower(genename))
+  colnames(tmp)[1]  <- c("gene")
+
+    #full model :
+    model <- lme(gene ~ Condition, ~1|MouseID, data = tmp) 
+    
+    anova = anova(model)
+    anova$gene = paste(genename)
+    
+    #posthocs
+    refgrid <- ref.grid(model)
+    ph <- emmeans(refgrid, ~Condition)
+    ph2 <- summary(contrast(ph, method="pairwise", adjust="BH"), infer=TRUE)
+    outsum <- as.data.frame(ph2)
+    outsum$gene <- genename
+    
+    anovafullmodel <- rbind(anovafullmodel,anova)
+    posthocfullmodel <- rbind(posthocfullmodel,outsum)
+}
+
+anovafullmodel$Significant <- ifelse(anovafullmodel$`p-value` < 0.05, "significant", "ns")
+posthocfullmodel$Significant <- ifelse(posthocfullmodel$p.value < 0.05, "significant", "ns")
+
+anovafullmodel %>% DT::datatable(., options=list(autoWidth=TRUE, scrollX=TRUE, scrollCollapse=TRUE))
+posthocfullmodel %>% DT::datatable(., options=list(autoWidth=TRUE, scrollX=TRUE, scrollCollapse=TRUE))
+
+write.csv(anovafullmodel, "LPS7_RTqPCR_anova.csv")
+write.csv(posthocfullmodel, "LPS7_RTqPCR_posthoc.csv")
+```
+
+### Graphs for 2^-ddCT Fold change relative to PBS control
+```{r, fig.width=8, fig.height=2}
+FC_data <- qPCR[,grepl("2\\...ddCT",colnames(qPCR))]
+
+FC_data <- as.data.frame(FC_data)
+FC_data$BrainRegion <- qPCR$BrainRegion
+FC_data$Condition <- qPCR$Condition
+FC_data$Cohort <- qPCR$Cohort
+FC_data$Sex <- qPCR$Sex
+FC_data$SacTime <- qPCR$SacTime
+FC_data$SampleName <- qPCR$SampleName
+
+FC_data <- FC_data %>% unite(MouseID, c(Cohort,SampleName), sep="_", remove=FALSE)
+FC_data <- as.data.frame(FC_data)
+
+FC <- FC_data %>% filter(Cohort=="Exp7")
+
+#genes
+genes <- unique(as.character(colnames(qPCR[,grepl("\\.dCT",colnames(qPCR))])))
+
+FC <- FC %>% group_by(Condition, MouseID) %>%
+  gather(gene, FoldChange,1:length(genes))
+
+#fix gene names:
+FC$gene <- gsub("..2...ddCT..","",FC$gene )
+#FC$gene  <- firstup(tolower(FC$gene ))
+FC$gene <- factor(FC$gene, levels=c("Cxcl16","S100a9","IL1B","TNFa"))
+
+#set as factor
+FC$Condition <- factor(FC$Condition, levels= c("PBS","1xLPS","2xLPS","3xLPS","4xLPS"))
+
+# Boxplots
+ggplot(FC, aes(x=Condition, y=FoldChange, group=Condition)) + 
+  facet_wrap(~Sex*gene, scales = "free", nrow=1)+
+  stat_summary(geom = "boxplot", 
+               fun.data = function(x) setNames(quantile(x, c(0.05, 0.25, 0.5, 0.75, 0.95)), c("ymin", "lower", "middle", "upper", "ymax")), 
+               position = "dodge", aes(fill=Condition))+ #gives line as median, top of box and bottom of box as 25th and 75th quartile, line = 5th and 9th percentile
+  geom_point(position = position_dodge(width = 0.90),size=1) + 
+  scale_fill_brewer(palette = "Reds") +
+  theme_cowplot(font_size = 8) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_x_discrete(name = "Condition") + #,limits = order2)+
+  scale_y_continuous(name = "Fold Change Relative PBS")
+
+# Supplementary Figure 3
+cbPalette <- c("lightblue", "yellow", "red","blue","purple")
+
+FC %>% filter(gene=="Cxcl16") %>%
+  ggplot(aes(x=Condition, y=log2(FoldChange), group=Condition)) + 
+  facet_wrap(~gene*BrainRegion, scales = "free", nrow=1)+
+  stat_summary(geom = "boxplot", 
+               fun.data = function(x) setNames(quantile(x, c(0.05, 0.25, 0.5, 0.75, 0.95)), c("ymin", "lower", "middle", "upper", "ymax")), 
+               position = "dodge", aes(fill=Condition))+ #gives line as median, top of box and bottom of box as 25th and 75th quartile, line = 5th and 9th percentile
+  geom_point(position = position_dodge(width = 0.90),size=1, shape=15) + 
+  scale_fill_manual(values = c("lightblue", "yellow", "red","blue","purple")) +
+  theme_cowplot(font_size = 8) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_x_discrete(name = "Condition") + #,limits = order2)+
+  scale_y_continuous(name = "Log2 Fold Change Relative PBS")
+
+FC %>% filter(gene=="S100a9") %>%
+  ggplot(aes(x=Condition, y=log2(FoldChange), group=Condition)) + 
+  facet_wrap(~gene*BrainRegion, scales = "free", nrow=1)+
+  stat_summary(geom = "boxplot", 
+               fun.data = function(x) setNames(quantile(x, c(0.05, 0.25, 0.5, 0.75, 0.95)), c("ymin", "lower", "middle", "upper", "ymax")), 
+               position = "dodge", aes(fill=Condition))+ #gives line as median, top of box and bottom of box as 25th and 75th quartile, line = 5th and 9th percentile
+  geom_point(position = position_dodge(width = 0.90),size=1, shape=15) + 
+  scale_fill_manual(values = c("lightblue", "yellow", "red","blue","purple")) +
+  theme_cowplot(font_size = 8) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_x_discrete(name = "Condition") + #,limits = order2)+
+  scale_y_continuous(name = "Log2 Fold Change Relative PBS")
+```
