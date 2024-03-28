@@ -1,0 +1,82 @@
+---
+title: "MGEnrichment Analysis"
+author: "Jenn Kim, Annie Ciernia"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# load libraries
+```{r}
+library(tidyverse)
+```
+
+```{r}
+# Focusing on all gene lists in database except for WGCNA modules
+# tidy up data
+setwd("MGEnrichmentResults/") # provided as a zip file in github repo
+files <- list.files()
+nf = length(files)
+good = vector("list", nf)
+for (i in 1:nf) {
+  tmp = read.csv(files[i])
+  tmp$Name = files[i]
+  tmp <- tmp %>% filter(!grepl("WGCNA", description)) %>% filter(Species=="mouse")
+  p.adjust(tmp$pvalue, "BH") -> tmp$padjust
+  good[[i]] = tmp
+}
+finaldf2 <- do.call(rbind, good)
+
+y <- finaldf2 %>% 
+  separate(Name, into=c("trash1","trash2","trash3","ClusterID"), sep="_") %>%
+  select(-c(trash1, trash2, trash3)) %>%
+  separate(ClusterID, into=c("ClusterID","trash4"), sep=".cs") %>%
+  select(-c(trash4, X))
+
+# calculations
+#% enrichment
+y$percent_userSet_in_Target <- (y$in_both_lists/(y$in_both_lists + y$in_userlist_only)*100)
+y$percent_userSet_in_Target <- round(y$percent_userSet_in_Target)
+y$percent_BG_in_Target <- (y$in_database_only/(y$in_database_only + y$not_in_both_lists)*100)
+y$percent_BG_in_Target <- round(y$percent_BG_in_Target)
+
+#fold enrichment relative to background
+y$FC <- (y$percent_userSet_in_Target - y$percent_BG_in_Target)/y$percent_BG_in_Target
+
+enrichments <- y
+
+# promoter overlap plots
+plot2 <-  enrichments %>% 
+  arrange(ClusterID, source)
+
+plot3 <- plot2 %>% 
+  gather(key=PercentEnrichment, value=percent, 21:22) %>%
+  mutate(PercentEnrichment = 
+           case_when(PercentEnrichment == "percent_userSet_in_Target" ~ "Target %",
+                     PercentEnrichment == "percent_BG_in_Target" ~ "Background %"))
+
+plot3 <- as.data.frame(plot3)
+plot3$PercentEnrichment <- factor(plot3$PercentEnrichment, levels=c("Target %", "Background %"))
+plot3$ClusterID <- factor(plot3$ClusterID, levels=c("2xLPScluster","4xLPScluster","LPSDowncluster"))
+
+plot3$PercentEnrichment[plot3$padjust >=.01] <- NA
+
+listsinclude <- plot3 %>% filter(padjust<0.01)
+listsinclude2 <- listsinclude$description
+
+plot4 <- plot3 %>% mutate(description2 = paste0(description, " (", source, ")"))
+
+pdf("MGEnrichment.dotPlot.pdf", width=21, height=20)
+plot4 %>% 
+  filter(description %in% listsinclude2) %>%
+  ggplot(aes(y = description2, x = ClusterID, group=PercentEnrichment)) +
+    facet_wrap(~groups, scales="free_y", ncol=1) +
+    theme_bw(base_size=12) +
+    geom_point(alpha=1, aes(size = percent, color=PercentEnrichment), position=position_dodge(width = .7)) + 
+    scale_color_manual(values = c("Target %" = "darkgreen", "Background %" = "darkgrey"), na.value=aes(alpha=0)) +
+    xlab("DEG clusters") +
+    ylab("Dataset description") + 
+    labs(color="% with peak", size="Percentage") +
+    scale_x_discrete(guide=guide_axis(angle=45))
+    #ggtitle("Significant enrichments against mouse microglial lists in MGEnrichment (padjust<0.01")
+dev.off()
+```
