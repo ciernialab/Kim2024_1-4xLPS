@@ -1,0 +1,118 @@
+---
+title: "MicrogliaDensity_Analysis"
+author: "Jenn Kim"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# load libraries
+```{r}
+library(tidyverse)
+library(cowplot)
+library(ggplot2)
+theme_set(theme_cowplot())
+library(nlme)
+library(lsmeans)
+```
+
+# load data
+```{r}
+data <- read.csv("MicrogliaNumbers-Density.csv") %>% select(-X)
+data$Condition <- factor(data$Condition, levels=c("PBS","1xLPS","2xLPS","3xLPS","4xLPS"))
+```
+
+# boxplots
+```{r}
+# males
+pdf("MicrogliaDensity_Males.pdf", width=9, height=3.2)
+data %>% filter(Sex=="M") %>%
+  ggplot(aes(x=Condition, y=MicrogliaDensity, group=Condition)) +
+  facet_wrap(~Sex*BrainRegion, scales="free", ncol=3) +
+  geom_boxplot(aes(group=Condition, fill=Condition), outlier.shape=NA) +
+  scale_fill_viridis_d() +
+  geom_point(position=position_dodge(width=0.9), size=1, aes(group=Condition)) +
+  ggtitle("Microglia density") +
+  labs(fill="Condition") +
+  ylab("Density") +
+  theme_classic(base_size=14) +
+  theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
+  theme(strip.background=element_rect(fill="#CCCCCC")) +
+  scale_y_continuous(labels = scales::scientific, limits=c(0.000216, 0.000349))
+dev.off()
+
+# females
+pdf("MicrogliaDensity_Females.pdf", width=9, height=3.2)
+data %>% filter(Sex=="F") %>%
+  ggplot(aes(x=Condition, y=MicrogliaDensity, group=Condition)) +
+  facet_wrap(~Sex*BrainRegion, scales="free", ncol=3) +
+  geom_boxplot(aes(group=Condition, fill=Condition), outlier.shape=NA) +
+  scale_fill_viridis_d() +
+  geom_point(position=position_dodge(width=0.9), size=1, aes(group=Condition)) +
+  ggtitle("Microglia density") +
+  labs(fill="Condition") +
+  ylab("Density") +
+  theme_classic(base_size=14) +
+  theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
+  theme(strip.background=element_rect(fill="#CCCCCC")) +
+  scale_y_continuous(labels = scales::scientific, limits=c(0.000228, 0.000339))
+dev.off()
+```
+
+# stats analysis
+```{r}
+test2 <- data
+
+brainregion <- unique(as.character(test2$BrainRegion))
+
+# females
+females <- test2 %>% filter(Sex=="F")
+
+# stats
+  tmp <- females
+  tmp <- as.data.frame(tmp)
+  
+  #model
+  model <- lme(MicrogliaDensity ~ Condition*BrainRegion, ~1|AnimalID, data=tmp)
+  
+  #anova
+  anova_females = anova(model)
+  
+  #posthoc
+  ph <- emmeans(model, ~Condition|BrainRegion)
+  ph2 <- contrast(ph, method="pairwise", adjust="none")
+  ph3 <- test(ph2, by=NULL, adjust="BH")
+  posthoc_females <- as.data.frame(ph3)
+
+# significance
+anova_females$Significant <- ifelse(anova_females$`p-value` < 0.05, "significant", "ns")
+posthoc_females$Significant <- ifelse(posthoc_females$p.value < 0.05, "significant", "ns")
+
+write.csv(anova_females,"MicrogliaDensity_Females_Anova.csv")
+write.csv(posthoc_females, "MicrogliaDensity_Females_Posthoc.csv")
+
+# males
+males <- test2 %>% filter(Sex=="M")
+
+# stats
+  tmp <- males
+  tmp <- as.data.frame(tmp)
+  
+  #model
+  model <- lme(MicrogliaDensity ~ Condition*BrainRegion, ~1|AnimalID, data=tmp)
+  
+  #anova
+  anova_males = anova(model)
+  
+  #posthoc
+  ph <- emmeans(model, ~Condition|BrainRegion)
+  ph2 <- contrast(ph, method="pairwise", adjust="none")
+  ph3 <- test(ph2, by=NULL, adjust="BH")
+  posthoc_males <- as.data.frame(ph3)
+
+# significance
+anova_males$Significant <- ifelse(anova_males$`p-value` < 0.05, "significant", "ns")
+posthoc_males$Significant <- ifelse(posthoc_males$p.value < 0.05, "significant", "ns")
+
+write.csv(anova_males,"MicrogliaDensity_Males_Anova.csv")
+write.csv(posthoc_males, "MicrogliaDensity_Males_Posthoc.csv")
+```
